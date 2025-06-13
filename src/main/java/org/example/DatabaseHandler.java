@@ -1,14 +1,28 @@
 package org.example;
 
 import java.io.FileWriter;
-import java.sql.*;
-import org.mindrot.jbcrypt.BCrypt;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.Scanner;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.mindrot.jbcrypt.BCrypt;
 
 public class DatabaseHandler {
     private static final String DB_URL = "jdbc:sqlite:users.db";
     static double balance = 0.0;
+    static double savings = 0.0;
     static Connection conn;
+    private ScheduledExecutorService scheduler;
 
     public static Connection getConnection() throws SQLException {
         if (conn == null || conn.isClosed()) {
@@ -64,20 +78,18 @@ public class DatabaseHandler {
                     outstanding_balance REAL NOT NULL,
                     status TEXT NOT NULL,
                     created_at DATETIME,
+                    next_payment_date DATE,
                     FOREIGN KEY (user_id) REFERENCES users(id)
                 );
                 """);
 
             // savings table
-            stmt.executeUpdate("""
-                CREATE TABLE IF NOT EXISTS savings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_email TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_email) REFERENCES users(email)
-                );
-                """);
+            stmt.executeUpdate("CREATE TABLE IF NOT EXISTS savings (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "user_email TEXT NOT NULL UNIQUE, " +
+                    "percentage INTEGER NOT NULL, " +
+                    "saved_amount REAL DEFAULT 0, " +
+                    "FOREIGN KEY (user_email) REFERENCES users(email))");
 
 
             ResultSet rs = stmt.executeQuery("""
@@ -87,6 +99,13 @@ public class DatabaseHandler {
             if (rs.next()) {
                 balance = rs.getDouble("balance");
             }
+
+            rs = stmt.executeQuery(
+                    "SELECT SUM(saved_amount) AS savings FROM savings");
+            if (rs.next()) {
+                savings = rs.getDouble("savings");
+            }
+
         } catch (SQLException e) {
             System.out.println("Error creating tables: " + e.getMessage());
             e.printStackTrace();
@@ -247,138 +266,152 @@ public class DatabaseHandler {
         }
     }
 
-    // ====== SAVINGS FUNCTIONALITY ======
-
-    public void activateSavings(String userEmail, double percentage) {
-        String checkSql = "SELECT user_email FROM savings WHERE user_email = ?";
-        String updateSql = "UPDATE savings SET amount = ? WHERE user_email = ?";
-        String insertSql = "INSERT INTO savings(user_email, amount) VALUES (?, ?)";
-
-        try (PreparedStatement checkStmt = getConnection().prepareStatement(checkSql)) {
-            checkStmt.setString(1, userEmail);
-            try (ResultSet rs = checkStmt.executeQuery()) {
-                if (rs.next()) {
-                    try (PreparedStatement updateStmt = getConnection().prepareStatement(updateSql)) {
-                        updateStmt.setDouble(1, percentage);
-                        updateStmt.setString(2, userEmail);
-                        int updated = updateStmt.executeUpdate();
-                        if (updated > 0) {
-                            System.out.println("Savings activated and updated for userEmail=" + userEmail);
-                        } else {
-                            System.out.println("Failed to update savings for userEmail=" + userEmail);
-                        }
-                    }
-                } else {
-                    try (PreparedStatement insertStmt = getConnection().prepareStatement(insertSql)) {
-                        insertStmt.setString(1, userEmail);
-                        insertStmt.setDouble(2, percentage);
-                        int inserted = insertStmt.executeUpdate();
-                        if (inserted > 0) {
-                            System.out.println("Savings activated for userEmail=" + userEmail);
-                        } else {
-                            System.out.println("Failed to insert savings for userEmail=" + userEmail);
-                        }
-                    }
-                }
+    // ====== Savings Auto-Deduction ======
+    public void startMonthlySavingsScheduler() {
+        scheduler = Executors.newSingleThreadScheduledExecutor();
+        
+        // Calculate initial delay until next month's last day
+        long initialDelay = calculateDaysUntilMonthEnd();
+        
+        // Schedule daily checks with initial delay
+        scheduler.scheduleAtFixedRate(() -> {
+            if (isLastDayOfMonth()) {
+                transferSavingsToBalance();
             }
-        } catch (SQLException e) {
-            System.out.println("Error activating savings for userEmail=" + userEmail + ": " + e.getMessage());
-            e.printStackTrace();
-        }
+        }, initialDelay, 1, TimeUnit.DAYS);
     }
 
-    /**
-     * Update the savings deduction percentage for a user.
-     * Here, 'percentage' stored in 'amount' column.
-     */
-    public void updateSavings(String userEmail, double percentage) {
-        String updateSql = "UPDATE savings SET amount = ? WHERE user_email = ?";
-
-        try (PreparedStatement pstmt = getConnection().prepareStatement(updateSql)) {
-            pstmt.setDouble(1, percentage);
-            pstmt.setString(2, userEmail);
-            int affected = pstmt.executeUpdate();
-            if (affected > 0) {
-                System.out.println("Savings deduction percentage updated for userEmail=" + userEmail);
-            } else {
-                System.out.println("No savings record found for userEmail=" + userEmail);
-            }
-        } catch (SQLException e) {
-            System.out.println("Error updating savings for userEmail=" + userEmail + ": " + e.getMessage());
-            e.printStackTrace();
-        }
+    private boolean isLastDayOfMonth() {
+        LocalDate today = LocalDate.now();
+        return today.getDayOfMonth() == today.lengthOfMonth();
     }
 
-    public void runMonthlySavingsTransfer() {
-        String selectActiveSql = "SELECT user_email, amount FROM savings";
-        String getDebitBalanceSql = "SELECT balance FROM transactions WHERE user_email = ? AND type = 'debit'";
-        String updateDebitSql = "UPDATE transactions SET balance = balance - ? WHERE user_email = ? AND type = 'debit'";
-        String updateSavingsSql = "UPDATE transactions SET balance = balance + ? WHERE user_email = ? AND type = 'savings'";
-        String insertSavingsSql = "INSERT INTO transactions (user_email, type, balance) VALUES (?, 'savings', ?)";
+    private long calculateDaysUntilMonthEnd() {
+        LocalDate today = LocalDate.now();
+        LocalDate lastDay = today.withDayOfMonth(today.lengthOfMonth());
+        return ChronoUnit.DAYS.between(today, lastDay);
+    }
 
-        try (PreparedStatement selectStmt = getConnection().prepareStatement(selectActiveSql);
-             ResultSet rs = selectStmt.executeQuery()) {
-
+    private void transferSavingsToBalance() {
+        String sql = "SELECT user_email, saved_amount FROM savings WHERE saved_amount > 0";
+        
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            
+            conn.setAutoCommit(false);
+            
             while (rs.next()) {
                 String userEmail = rs.getString("user_email");
-                double deductionPercent = rs.getDouble("amount");
+                double amount = rs.getDouble("saved_amount");
+                
+                // Transfer to balance
+                saveTransaction("Credit", amount, "Monthly savings transfer", userEmail);
+                
+                // Reset savings
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "UPDATE savings SET saved_amount = 0 WHERE user_email = ?")) {
+                    ps.setString(1, userEmail);
+                    ps.executeUpdate();
+                }
+                
+                savings -= amount;
+                System.out.println("Transferred RM" + amount + " from savings to balance");
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            System.err.println("Error during savings transfer: " + e.getMessage());
+            try {
+                conn.rollback();
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
 
-                try (PreparedStatement debitStmt = getConnection().prepareStatement(getDebitBalanceSql)) {
-                    debitStmt.setString(1, userEmail);
-                    try (ResultSet debitRs = debitStmt.executeQuery()) {
-                        if (debitRs.next()) {
-                            double debitBalance = debitRs.getDouble("balance");
-                            double deductionAmount = debitBalance * (deductionPercent / 100.0);
+    public void shutdownScheduler() {
+        if (scheduler != null) {
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(1, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
 
-                            if (deductionAmount > 0 && debitBalance >= deductionAmount) {
-                                try {
-                                    conn.setAutoCommit(false);
-
-                                    try (PreparedStatement updateDebitStmt = getConnection().prepareStatement(updateDebitSql)) {
-                                        updateDebitStmt.setDouble(1, deductionAmount);
-                                        updateDebitStmt.setString(2, userEmail);
-                                        updateDebitStmt.executeUpdate();
-                                    }
-
-                                    try (PreparedStatement updateSavingsStmt = getConnection().prepareStatement(updateSavingsSql)) {
-                                        updateSavingsStmt.setDouble(1, deductionAmount);
-                                        updateSavingsStmt.setString(2, userEmail);
-                                        int affectedRows = updateSavingsStmt.executeUpdate();
-
-                                        if (affectedRows == 0) {
-                                            try (PreparedStatement insertSavingsStmt = getConnection().prepareStatement(insertSavingsSql)) {
-                                                insertSavingsStmt.setString(1, userEmail);
-                                                insertSavingsStmt.setDouble(2, deductionAmount);
-                                                insertSavingsStmt.executeUpdate();
-                                            }
-                                        }
-                                    }
-
-                                    conn.commit();
-                                    System.out.println("Monthly transfer completed for userEmail=" + userEmail + ", amount=" + deductionAmount);
-                                } catch (SQLException e) {
-                                    conn.rollback();
-                                    System.out.println("Transaction rolled back for userEmail=" + userEmail + ": " + e.getMessage());
-                                    e.printStackTrace();
-                                } finally {
-                                    conn.setAutoCommit(true);
-                                }
-                            } else {
-                                System.out.println("Insufficient funds or zero deduction for userEmail=" + userEmail);
-                            }
-                        } else {
-                            System.out.println("No debit account found for userEmail=" + userEmail);
-                        }
-                    }
-                } catch (SQLException e) {
-                    System.out.println("Error processing debit account for userEmail=" + userEmail + ": " + e.getMessage());
-                    e.printStackTrace();
+    // ====== Savings Activation ======
+    public void activateSavings(String userEmail, int percentage) {
+        // First check if savings exists for user
+        String checkSql = "SELECT 1 FROM savings WHERE user_email = ?";
+        String insertSql = "INSERT INTO savings (user_email, percentage) VALUES (?, ?)";
+        String updateSql = "UPDATE savings SET percentage = ? WHERE user_email = ?";
+        
+        try {
+            // Check if record exists
+            boolean exists = false;
+            try (PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
+                checkStmt.setString(1, userEmail);
+                try (ResultSet rs = checkStmt.executeQuery()) {
+                    exists = rs.next();
                 }
             }
-
+            
+            // Insert or update accordingly
+            if (exists) {
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
+                    updateStmt.setInt(1, percentage);
+                    updateStmt.setString(2, userEmail);
+                    updateStmt.executeUpdate();
+                }
+            } else {
+                try (PreparedStatement insertStmt = conn.prepareStatement(insertSql)) {
+                    insertStmt.setString(1, userEmail);
+                    insertStmt.setInt(2, percentage);
+                    insertStmt.executeUpdate();
+                }
+            }
         } catch (SQLException e) {
-            System.out.println("Error running monthly savings transfer: " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Error activating savings: " + e.getMessage());
+        }
+    }
+
+    public void processSavingsOnDebit(String userEmail, double debitAmount) {
+        String sql = "SELECT percentage FROM savings WHERE user_email = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, userEmail);
+            ResultSet rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                int percentage = rs.getInt("percentage");
+                double savingsAmount = debitAmount * (percentage / 100.0);
+                
+                // Add to savings
+                try (PreparedStatement updateStmt = conn.prepareStatement(
+                        "UPDATE savings SET saved_amount = saved_amount + ? WHERE user_email = ?")) {
+                    updateStmt.setDouble(1, savingsAmount);
+                    updateStmt.setString(2, userEmail);
+                    updateStmt.executeUpdate();
+                }
+                
+                savings += savingsAmount;
+            }
+        } catch (SQLException e) {
+            System.err.println("Error processing savings: " + e.getMessage());
+        }
+    }
+
+    public double getSavings(String userEmail) {
+        String sql = "SELECT saved_amount FROM savings WHERE user_email = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, userEmail);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getDouble("saved_amount") : 0.0;
+        } catch (SQLException e) {
+            System.err.println("Error getting savings: " + e.getMessage());
+            return 0.0;
         }
     }
 
@@ -484,6 +517,18 @@ public class DatabaseHandler {
 
         } catch (SQLException e) {
             e.printStackTrace();
+        }
+    }
+
+    public double getLoanBalance(String userEmail) {
+        String sql = "SELECT COALESCE(SUM(outstanding_balance), 0) FROM loans WHERE user_id = (SELECT id FROM users WHERE email = ?)";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, userEmail);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getDouble(1) : 0.0;
+        } catch (SQLException e) {
+            System.err.println("Error getting loan balance: " + e.getMessage());
+            return 0.0;
         }
     }
 
