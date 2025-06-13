@@ -1,6 +1,10 @@
 package org.example;
 
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Scanner;
 import java.util.regex.Pattern;
 
@@ -12,6 +16,19 @@ public class Main {
     private static String currentUserEmail;
 
     public static void main(String[] args) {
+        // Start the automatic savings scheduler
+        db.startMonthlySavingsScheduler();
+        
+        // Ensure proper shutdown
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                db.shutdownScheduler();
+                db.disconnectDatabase();
+            } catch (SQLException e) {
+                System.err.println("Shutdown error: " + e.getMessage());
+            }
+        }));
+
         while (true) {
             System.out.println("\n== Ledger System ==");
             System.out.println("Login or Register:");
@@ -89,6 +106,13 @@ public class Main {
         return password.matches("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{8,}$");
     }
 
+    public static void showUserSummary() {
+        double balance = DatabaseHandler.balance;
+        double savings = db.getSavings(currentUserEmail);
+        double loan = db.getLoanBalance(currentUserEmail);
+        printUserSummary(currentUserEmail, balance, savings, loan);
+    }
+
     public static void printUserSummary(String name, double balance, double savings, double loan) {
         System.out.println("== Welcome, " + name + " ==");
         System.out.printf("Balance: %.2f\n", balance);
@@ -114,9 +138,6 @@ public class Main {
             System.out.println("Email not registered!\n");
         } else if (db.validateUser(email, password)) {
             System.out.println("\nLogin Successful!!!\n");
-
-//            printUserSummary(name, balance, savings, loans);
-
             currentUserEmail = email;
             int userId = db.getUserId(currentUserEmail);
 
@@ -137,8 +158,8 @@ public class Main {
         try {
             Scanner input = new Scanner(System.in);
             int choice;
-
             while (true) {
+                printUserSummary(currentUserEmail, balance, balance, balance);
                 System.out.println("\n==Transaction Menu==");
                 System.out.println("== Transaction ==");
                 System.out.println("1.Debit");
@@ -171,7 +192,7 @@ public class Main {
                             default -> System.out.println("Invalid.");
                         }
                     }
-                    case 4 -> savings();
+                    case 4 -> setupSavings();
                     case 5 -> creditLoan();
                     case 6 -> depositInterestPredictor();
                     case 7 -> {
@@ -193,6 +214,14 @@ public class Main {
     }
 
     public static void handleDebit(Scanner input) {
+
+        // Check if blocked first
+        int userId = db.getUserId(currentUserEmail);
+        if (db.isBlocked(userId)) {
+            System.out.println("Cannot perform transactions - you have overdue loans!");
+            return;
+        }
+
         System.out.println("==Debit==");
         System.out.print("Enter Debit Amount: ");
         double amount = input.nextDouble();
@@ -212,10 +241,21 @@ public class Main {
 
         balance -= amount;
         db.saveTransaction("Debit", amount, desc, currentUserEmail);
+
+        // Process savings deduction
+        db.processSavingsOnDebit(currentUserEmail, amount);
         System.out.println("Debit successfully recorded! Current balance: " + balance);
     }
 
     public static void handleCredit(Scanner input) {
+        
+        // Check if blocked first
+        int userId = db.getUserId(currentUserEmail);
+        if (db.isBlocked(userId)) {
+            System.out.println("Cannot perform transactions - you have overdue loans!");
+            return;
+        }
+
         System.out.println("==Credit==");
         System.out.print("Enter Credit Amount: ");
         double amount = input.nextDouble();
@@ -233,35 +273,26 @@ public class Main {
         System.out.println("Credit successfully recorded! Current balance: " + balance);
     }
 
-    public static void savings() {
-        System.out.println("\n== Savings ==");
-
+    private static void setupSavings() {
+        System.out.println(" == Savings == ");
         System.out.print("Are you sure you want to activate it? (Y/N) : ");
-        String answer = scanner.nextLine().trim().toUpperCase();
-
-        if (!answer.equals("Y")) {
-            System.out.println("Savings activation cancelled.");
+        String confirm = scanner.nextLine().trim().toUpperCase();
+        
+        if (!confirm.equals("Y")) {
             return;
         }
 
         System.out.print("Please enter the percentage you wish to deduct from the next debit: ");
-        String percInput = scanner.nextLine().trim();
+        int percentage = scanner.nextInt();
+        scanner.nextLine(); 
 
-        double percentage;
-        try {
-            percentage = Double.parseDouble(percInput);
-        } catch (NumberFormatException e) {
-            System.out.println("Invalid input. Please enter a valid number.");
+        if (percentage < 1 || percentage > 100) {
+            System.out.println("Percentage must be between 1 and 100");
             return;
         }
 
-        if (percentage <= 0 || percentage >= 100) {
-            System.out.println("Please enter a valid percentage between 0 and 100.");
-            return;
-        }
-
-        // Call the DatabaseHandler's method that does insert/update
         db.activateSavings(currentUserEmail, percentage);
+        System.out.println("Savings Settings added successfully!!!");
     }
 
     public static void creditLoan() {
@@ -274,46 +305,25 @@ public class Main {
 
         switch (choice) {
             case 1 -> applyForLoan();
-            case 2 -> makeLoanPayment();
+            case 2 -> repayLoan();
             default -> System.out.println("Invalid choice.");
         }
     }
 
     private static void applyForLoan() {
-        System.out.println("\n== Apply for Loan ==");
-
-        // Get user ID first
         int userId = db.getUserId(currentUserEmail);
-        if (userId == -1) {
-            System.out.println("Error: Could not find user ID");
-            return;
+        try {
+            db.applyLoan(scanner, userId); // Using your existing method
+            System.out.println("Loan application submitted successfully!");
+        } catch (Exception e) {
+            System.out.println("Error applying for loan: " + e.getMessage());
         }
-
-        System.out.print("Enter principal amount: ");
-        double principal = scanner.nextDouble();
-        scanner.nextLine();
-
-        System.out.print("Enter interest rate (e.g. 0.05 for 5%): ");
-        double interestRate = scanner.nextDouble();
-        scanner.nextLine();
-
-        System.out.print("Enter repayment period in months: ");
-        int period = scanner.nextInt();
-        scanner.nextLine();
-
-        db.applyLoan(scanner, userId); // Now passing correct parameter types
     }
 
-    private static void makeLoanPayment() {
-        // Get user ID from email
+    private static void repayLoan() {
+        System.out.println("\n== Repay Loan ==");
         int userId = db.getUserId(currentUserEmail);
-        if (userId == -1) {
-            System.out.println("Error: User not found.");
-            return;
-        }
-
-        System.out.println("\n== Make Loan Payment ==");
-        db.repayLoan(scanner, userId);
+        db.repayLoan(scanner, userId); // Using your existing method
     }
 
 
