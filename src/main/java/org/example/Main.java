@@ -158,7 +158,7 @@ public class Main {
             int choice;
             while (true) {
                 showUserSummary();
-                System.out.println("\n==Transaction Menu==");
+                System.out.println("\n== Transaction Menu ==");
                 System.out.println("1.Debit");
                 System.out.println("2.Credit");
                 System.out.println("3.History Menu");
@@ -279,7 +279,7 @@ public class Main {
     }
 
     private static void setupSavings() {
-        System.out.println(" == Savings == ");
+        System.out.println("\n== Savings ==");
         System.out.print("Are you sure you want to activate it? (Y/N) : ");
         String confirm = scanner.nextLine().trim().toUpperCase();
 
@@ -306,6 +306,7 @@ public class Main {
         System.out.println("2. Make Loan Payment");
         System.out.println("3. Back");
         System.out.print("> ");
+        System.out.println();
         int choice = scanner.nextInt();
         scanner.nextLine(); // consume newline
 
@@ -333,7 +334,7 @@ public class Main {
 
 
     public static void depositInterestPredictor() {
-        System.out.println("==Deposit Interest Predictor==");
+        System.out.println("\n== Deposit Interest Predictor ==");
         Scanner scanner = new Scanner(System.in);
         System.out.print("Enter deposit amount: ");
         double deposit = scanner.nextDouble();
@@ -351,6 +352,7 @@ public class Main {
         System.out.println("5. AmBank (2.55%)");
         System.out.println("6. Standard Chartered (2.65%)");
         System.out.println("> ");
+        System.out.println();
         int bank = scanner.nextInt();
         double rate;
 
@@ -435,7 +437,7 @@ public class Main {
             }
 
             try (ResultSet rs = stmt.executeQuery(query.toString())) {
-                System.out.println("ID | Type   | Amount  | Description | Date");
+                System.out.println("\nID | Type   | Amount       | Description          | Date");
                 System.out.println("------------------------------------------------------------");
                 while (rs.next()) {
                     System.out.printf(Locale.US, "%-2d | %-6s | %12.2f | %-20s | %s%n",

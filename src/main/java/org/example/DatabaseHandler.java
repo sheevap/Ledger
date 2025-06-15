@@ -142,7 +142,7 @@ public class DatabaseHandler {
     }
 
     public static void showHistory(String email) {
-        System.out.println("==Transaction History==");
+        System.out.println("== Transaction History ==");
 
         String sql = "SELECT * FROM transactions WHERE user_email = ? ORDER BY timestamp DESC";
 
@@ -150,7 +150,7 @@ public class DatabaseHandler {
             stmt.setString(1, email);
             ResultSet rs = stmt.executeQuery();
 
-            System.out.println("ID | Type   | Amount  | Description         | Timestamp");
+            System.out.println("\nID | Type   | Amount       | Description          | Date");
             System.out.println("-------------------------------------------------------------");
 
             while (rs.next()) {
