@@ -1,10 +1,8 @@
 package org.example;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Scanner;
 import java.util.regex.Pattern;
@@ -186,7 +184,7 @@ public class Main {
 
                         switch (historyChoice) {
                             case 1 -> db.showHistory(currentUserEmail);
-                            case 2 -> filterHistory();
+                            case 2 -> filterHistory(currentUserEmail);
                             case 3 -> db.exportToCSV(currentUserEmail);
                             case 4 -> transactionMenu();
                             default -> System.out.println("Invalid.");
@@ -306,9 +304,9 @@ public class Main {
         System.out.println("2. Make Loan Payment");
         System.out.println("3. Back");
         System.out.print("> ");
-        System.out.println();
         int choice = scanner.nextInt();
         scanner.nextLine(); // consume newline
+        System.out.println();
 
         switch (choice) {
             case 1 -> applyForLoan();
@@ -328,7 +326,7 @@ public class Main {
     }
 
     private static void repayLoan() {
-        System.out.println("\n== Repay Loan ==");
+        System.out.println("== Repay Loan ==");
         db.repayLoan(scanner, currentUserEmail);
     }
 
@@ -351,9 +349,8 @@ public class Main {
         System.out.println("4. Alliance (2.85%)");
         System.out.println("5. AmBank (2.55%)");
         System.out.println("6. Standard Chartered (2.65%)");
-        System.out.println("> ");
+        System.out.print("> ");
         int bank = scanner.nextInt();
-        System.out.println();
         double rate;
 
         switch (bank) {
@@ -381,62 +378,67 @@ public class Main {
         }
 
         double interestRate = (deposit * rate) / 12 / 100;
-        System.out.printf(Locale.US, "Monthly interest earned: %.2f\n", interestRate);
+        System.out.printf(Locale.US, "\nMonthly interest earned: %.2f\n", interestRate);
     }
 
-    static void filterHistory() throws SQLException {
-        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:ledger.db");
-             Statement stmt = conn.createStatement()) {
+    public static void filterHistory(String currentUserEmail) throws SQLException {
+        StringBuilder query = new StringBuilder("SELECT * FROM transactions WHERE user_email = ?");
+        List<Object> parameters = new ArrayList<>();
+        parameters.add(currentUserEmail);
 
-            StringBuilder query = new StringBuilder("SELECT * FROM transactions WHERE 1=1");
-            boolean hasFilter = false;
+        // Date range filter
+        System.out.print("\nFilter by date range? (Y/N): ");
+        if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
+            System.out.print("Start date (YYYY-MM-DD): ");
+            String startDate = scanner.nextLine().trim();
+            System.out.print("End date (YYYY-MM-DD): ");
+            String endDate = scanner.nextLine().trim();
+            query.append(" AND DATE(timestamp) BETWEEN ? AND ?");
+            parameters.add(startDate);
+            parameters.add(endDate);
+        }
 
-            // Filter: Date Range
-            System.out.print("Filter by date range? (Y/N): ");
-            if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
-                System.out.print("Start date (YYYY-MM-DD): ");
-                String startDate = scanner.nextLine().trim();
-                System.out.print("End date (YYYY-MM-DD): ");
-                String endDate = scanner.nextLine().trim();
-                query.append(" AND DATE(timestamp) BETWEEN '").append(startDate).append("' AND '").append(endDate).append("'");
-                hasFilter = true;
+        // Transaction type
+        System.out.print("Filter by transaction type (Debit/Credit)? (Y/N): ");
+        if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
+            System.out.print("Enter type (Debit/Credit): ");
+            String type = scanner.nextLine().trim();
+            query.append(" AND LOWER(type) = LOWER(?)");
+            parameters.add(type);
+        }
+
+        // Amount range
+        System.out.print("Filter by amount range? (Y/N): ");
+        if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
+            System.out.print("Minimum amount: ");
+            double min = Double.parseDouble(scanner.nextLine().trim());
+            System.out.print("Maximum amount: ");
+            double max = Double.parseDouble(scanner.nextLine().trim());
+            query.append(" AND amount BETWEEN ? AND ?");
+            parameters.add(min);
+            parameters.add(max);
+        }
+
+        // Sorting
+        System.out.print("Sort results? (Y/N): ");
+        if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
+            System.out.print("Sort by (date/amount): ");
+            String field = scanner.nextLine().trim().toLowerCase();
+            System.out.print("Order (asc/desc): ");
+            String order = scanner.nextLine().trim().toUpperCase();
+            if (field.equals("date")) {
+                query.append(" ORDER BY timestamp ").append(order);
+            } else if (field.equals("amount")) {
+                query.append(" ORDER BY amount ").append(order);
+            }
+        }
+
+        try (PreparedStatement pstmt = db.getConnection().prepareStatement(query.toString())) {
+            for (int i = 0; i < parameters.size(); i++) {
+                pstmt.setObject(i + 1, parameters.get(i));
             }
 
-            // Filter: Transaction Type
-            System.out.print("Filter by transaction type (Debit/Credit)? (Y/N): ");
-            if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
-                System.out.print("Enter type (Debit/Credit): ");
-                String type = scanner.nextLine().trim();
-                query.append(" AND LOWER(type) = LOWER('").append(type).append("')");
-                hasFilter = true;
-            }
-
-            // Filter: Amount Range
-            System.out.print("Filter by amount range? (Y/N): ");
-            if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
-                System.out.print("Minimum amount: ");
-                double min = Double.parseDouble(scanner.nextLine().trim());
-                System.out.print("Maximum amount: ");
-                double max = Double.parseDouble(scanner.nextLine().trim());
-                query.append(" AND amount BETWEEN ").append(min).append(" AND ").append(max);
-                hasFilter = true;
-            }
-
-            // Sorting
-            System.out.print("Sort results? (Y/N): ");
-            if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
-                System.out.print("Sort by (date/amount): ");
-                String field = scanner.nextLine().trim().toLowerCase();
-                System.out.print("Order (asc/desc): ");
-                String order = scanner.nextLine().trim().toUpperCase();
-                if (field.equals("date")) {
-                    query.append(" ORDER BY timestamp ").append(order);
-                } else if (field.equals("amount")) {
-                    query.append(" ORDER BY amount ").append(order);
-                }
-            }
-
-            try (ResultSet rs = stmt.executeQuery(query.toString())) {
+            try (ResultSet rs = pstmt.executeQuery()) {
                 System.out.println("\nID | Type   | Amount       | Description          | Date");
                 System.out.println("------------------------------------------------------------");
                 while (rs.next()) {
@@ -448,7 +450,6 @@ public class Main {
                             rs.getString("timestamp"));
                 }
             }
-
         } catch (Exception e) {
             System.out.println("Error retrieving filtered history: " + e.getMessage());
             e.printStackTrace();

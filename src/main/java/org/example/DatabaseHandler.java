@@ -142,7 +142,7 @@ public class DatabaseHandler {
     }
 
     public static void showHistory(String email) {
-        System.out.println("== Transaction History ==");
+        System.out.println("\n== Transaction History ==");
 
         String sql = "SELECT * FROM transactions WHERE user_email = ? ORDER BY timestamp DESC";
 
@@ -150,7 +150,7 @@ public class DatabaseHandler {
             stmt.setString(1, email);
             ResultSet rs = stmt.executeQuery();
 
-            System.out.println("\nID | Type   | Amount       | Description          | Date");
+            System.out.println("ID | Type   | Amount       | Description          | Date");
             System.out.println("-------------------------------------------------------------");
 
             while (rs.next()) {
@@ -240,7 +240,7 @@ public class DatabaseHandler {
                     fw.write(row);
                 }
 
-                System.out.println("Successfully exported transactions to " + outputFile);
+                System.out.println("\nSuccessfully exported transactions to " + outputFile);
             }
         } catch (Exception e) {
             System.out.println("Error exporting to CSV: " + e.getMessage());
@@ -433,6 +433,7 @@ public class DatabaseHandler {
             pstmt.setDouble(5, totalRepayment);
             pstmt.setDouble(6, monthlyRepayment);
             pstmt.executeUpdate();
+            saveTransaction("Debit", principal, "Loan disbursement", email);
             System.out.println("Loan applied successfully. Total repayment: " + totalRepayment);
         } catch (SQLException e) {
             e.printStackTrace();
@@ -573,7 +574,7 @@ public class DatabaseHandler {
                     "FROM transactions WHERE type = 'Debit' " +
                     "GROUP BY category");
 
-            System.out.println("Views for visualization created. You can now use Power BI to access them.");
+            System.out.println("\nViews for visualization created. You can now use Power BI to access them.");
 
         } catch (SQLException e) {
             System.err.println("Error creating visualization views: " + e.getMessage());
