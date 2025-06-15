@@ -352,8 +352,8 @@ public class Main {
         System.out.println("5. AmBank (2.55%)");
         System.out.println("6. Standard Chartered (2.65%)");
         System.out.println("> ");
-        System.out.println();
         int bank = scanner.nextInt();
+        System.out.println();
         double rate;
 
         switch (bank) {
