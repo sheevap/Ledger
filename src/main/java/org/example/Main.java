@@ -179,6 +179,7 @@ public class Main {
                         System.out.println("1.View Transaction History");
                         System.out.println("2.Filter and Sort");
                         System.out.println("3.Export to CSV");
+                        System.out.println("4.Back");
                         System.out.print("> ");
                         int historyChoice = scanner.nextInt();
                         scanner.nextLine();
@@ -187,6 +188,7 @@ public class Main {
                             case 1 -> db.showHistory(currentUserEmail);
                             case 2 -> filterHistory();
                             case 3 -> db.exportToCSV(currentUserEmail);
+                            case 4 -> transactionMenu();
                             default -> System.out.println("Invalid.");
                         }
                     }
@@ -302,6 +304,7 @@ public class Main {
         System.out.println("\n== Credit Loan ==");
         System.out.println("1. Apply for Loan");
         System.out.println("2. Make Loan Payment");
+        System.out.println("3. Back");
         System.out.print("> ");
         int choice = scanner.nextInt();
         scanner.nextLine(); // consume newline
@@ -309,6 +312,7 @@ public class Main {
         switch (choice) {
             case 1 -> applyForLoan();
             case 2 -> repayLoan();
+            case 3 -> transactionMenu();
             default -> System.out.println("Invalid choice.");
         }
     }
