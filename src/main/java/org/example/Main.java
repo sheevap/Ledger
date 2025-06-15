@@ -5,14 +5,13 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Locale;
 import java.util.Scanner;
 import java.util.regex.Pattern;
 
-//import static org.example.DatabaseHandler.balance;
-
 public class Main {
     private static final Scanner scanner = new Scanner(System.in);
-    private static final DatabaseHandler db = new DatabaseHandler(); // Static block auto-runs
+    private static final DatabaseHandler db = new DatabaseHandler();
     private static String currentUserEmail;
 
     public static void main(String[] args) {
@@ -92,7 +91,7 @@ public class Main {
         if (db.userExists(email)) {
             System.out.println("Email already registered!\n");
         } else {
-            db.insertUser(name, email, password); // Use "name" not "username"
+            db.insertUser(name, email, password);
             System.out.println("\nRegister Successful!!!\n");
         }
     }
@@ -120,9 +119,9 @@ public class Main {
 
     public static void printUserSummary(String name, double balance, double savings, double totalRepayment) {
         System.out.println("\n== Welcome, " + name + " ==");
-        System.out.printf("Balance: %.2f\n", balance);
-        System.out.printf("Savings: %.2f\n", savings);
-        System.out.printf("Loan: %.2f\n", totalRepayment);
+        System.out.printf(Locale.US, "Balance: %.2f\n", balance);
+        System.out.printf(Locale.US, "Savings: %.2f\n", savings);
+        System.out.printf(Locale.US, "Loan: %.2f\n", totalRepayment);
     }
 
     private static void loginUser() {
@@ -145,7 +144,6 @@ public class Main {
             System.out.println("\nLogin Successful!!!\n");
 
             currentUserEmail = email;
-//            int userId = db.getUserId(currentUserEmail);
             db.checkLoanReminders(email);
 
             transactionMenu();
@@ -243,11 +241,11 @@ public class Main {
         }
 
         balance -= amount;
-        db.saveTransaction("Debit", amount, desc, currentUserEmail);
+        db.saveTransaction("Credit", amount, desc, currentUserEmail);
 
         // Process savings deduction
         db.processSavingsOnDebit(currentUserEmail, amount);
-        System.out.println("Debit successfully recorded! Current balance: " + balance);
+        System.out.println("Credit successfully recorded! Current balance: " + balance);
     }
 
     public static void handleDebit(Scanner input) {
@@ -274,8 +272,8 @@ public class Main {
         }
 
         balance += amount;
-        db.saveTransaction("Credit", amount, desc, currentUserEmail);
-        System.out.println("Credit successfully recorded! Current balance: " + balance);
+        db.saveTransaction("Debit", amount, desc, currentUserEmail);
+        System.out.println("Debit successfully recorded! Current balance: " + balance);
     }
 
     private static void setupSavings() {
@@ -287,7 +285,7 @@ public class Main {
             return;
         }
 
-        System.out.print("Please enter the percentage you wish to deduct from the next debit: ");
+        System.out.print("Please enter the percentage you wish to deduct from the next credit: ");
         int percentage = scanner.nextInt();
         scanner.nextLine();
 
@@ -316,9 +314,8 @@ public class Main {
     }
 
     private static void applyForLoan() {
-//        String email = db.getUserId(currentUserEmail);
         try {
-            db.applyLoan(scanner, currentUserEmail); // Using your existing method
+            db.applyLoan(scanner, currentUserEmail);
             System.out.println("Loan application submitted successfully!");
         } catch (Exception e) {
             System.out.println("Error applying for loan: " + e.getMessage());
@@ -327,8 +324,7 @@ public class Main {
 
     private static void repayLoan() {
         System.out.println("\n== Repay Loan ==");
-//        String userEmail = db.getUserId(currentUserEmail);
-        db.repayLoan(scanner, currentUserEmail); // Using your existing method
+        db.repayLoan(scanner, currentUserEmail);
     }
 
 
@@ -350,6 +346,7 @@ public class Main {
         System.out.println("4. Alliance (2.85%)");
         System.out.println("5. AmBank (2.55%)");
         System.out.println("6. Standard Chartered (2.65%)");
+        System.out.println("> ");
         int bank = scanner.nextInt();
         double rate;
 
@@ -378,7 +375,7 @@ public class Main {
         }
 
         double interestRate = (deposit * rate) / 12 / 100;
-        System.out.printf("Monthly interest earned: %.2f\n", interestRate);
+        System.out.printf(Locale.US, "Monthly interest earned: %.2f\n", interestRate);
     }
 
     static void filterHistory() throws SQLException {
@@ -400,11 +397,11 @@ public class Main {
             }
 
             // Filter: Transaction Type
-            System.out.print("Filter by transaction type (debit/credit)? (Y/N): ");
+            System.out.print("Filter by transaction type (Debit/Credit)? (Y/N): ");
             if (scanner.nextLine().trim().equalsIgnoreCase("Y")) {
                 System.out.print("Enter type (Debit/Credit): ");
                 String type = scanner.nextLine().trim();
-                query.append(" AND type = '").append(type).append("'");
+                query.append(" AND LOWER(type) = LOWER('").append(type).append("')");
                 hasFilter = true;
             }
 
@@ -437,7 +434,7 @@ public class Main {
                 System.out.println("ID | Type   | Amount  | Description | Date");
                 System.out.println("------------------------------------------------------------");
                 while (rs.next()) {
-                    System.out.printf("%-2d | %-6s | %7.2f | %-12s | %s%n",
+                    System.out.printf(Locale.US, "%-2d | %-6s | %12.2f | %-20s | %s%n",
                             rs.getInt("id"),
                             rs.getString("type"),
                             rs.getDouble("amount"),

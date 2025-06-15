@@ -7,9 +7,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Locale;
 import java.util.Scanner;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -19,28 +19,26 @@ import org.mindrot.jbcrypt.BCrypt;
 
 public class DatabaseHandler {
     private static final String DB_URL = "jdbc:sqlite:ledger.db";
-//    static double balance = 0.0;
-    static double savings = 0.0;
     static Connection conn;
     private ScheduledExecutorService scheduler;
 
-    public static Connection getConnection() throws SQLException {
-        if (conn == null || conn.isClosed()) {
-            conn = DriverManager.getConnection(DB_URL);
-        }
-        return conn;
-    }
-
-    // Static block to initialize database table without requiring a main method
+    // initialize database table and connection
     static {
         try {
-            conn = DriverManager.getConnection(DB_URL);
+            conn = getConnection();
             createTables();
 
             System.out.println("Connected to SQLite database successfully.");
         } catch (SQLException e) {
             System.out.println("Error connecting to database: " + e.getMessage());
         }
+    }
+
+    public static Connection getConnection() throws SQLException {
+        if (conn == null || conn.isClosed()) {
+            conn = DriverManager.getConnection(DB_URL);
+        }
+        return conn;
     }
 
     public static void createTables() throws SQLException {
@@ -100,8 +98,7 @@ public class DatabaseHandler {
 
     public boolean userExists(String email) {
         String sql = "SELECT email FROM users WHERE email = ?";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
+        try (PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
 
             pstmt.setString(1, email);
             ResultSet rs = pstmt.executeQuery();
@@ -115,8 +112,7 @@ public class DatabaseHandler {
     public void insertUser(String name, String email, String password) {
         String hashedPassword = BCrypt.hashpw(password, BCrypt.gensalt()); // Hashing password
         String sql = "INSERT INTO users(name, email, password) VALUES(?,?,?)";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
 
             pstmt.setString(1, name);
             pstmt.setString(2, email);
@@ -130,8 +126,7 @@ public class DatabaseHandler {
 
     public boolean validateUser(String email, String password) {
         String sql = "SELECT password FROM users WHERE email = ?";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
-             PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
+        try (PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
 
             pstmt.setString(1, email);
             ResultSet rs = pstmt.executeQuery();
@@ -151,7 +146,7 @@ public class DatabaseHandler {
 
         String sql = "SELECT * FROM transactions WHERE user_email = ? ORDER BY timestamp DESC";
 
-        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement stmt = getConnection().prepareStatement(sql)) {
             stmt.setString(1, email);
             ResultSet rs = stmt.executeQuery();
 
@@ -159,7 +154,7 @@ public class DatabaseHandler {
             System.out.println("-------------------------------------------------------------");
 
             while (rs.next()) {
-                System.out.printf("%-2d | %-6s | %7.2f | %-20s | %s\n",
+                System.out.printf(Locale.US, "%-2d | %-6s | %12.2f | %-20s | %s\n",
                         rs.getInt("id"),
                         rs.getString("type"),
                         rs.getDouble("amount"),
@@ -196,8 +191,6 @@ public class DatabaseHandler {
             ResultSet rs = ps.executeQuery();
 
             java.time.LocalDate today = java.time.LocalDate.now();
-            java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
-
             boolean hasReminder = false;
 
             while (rs.next()) {
@@ -207,12 +200,9 @@ public class DatabaseHandler {
                 int months = rs.getInt("repayment_period");
                 java.time.LocalDate dueDate = createdDate.plusMonths(months);
 
-                long daysLeft = java.time.temporal.ChronoUnit.DAYS.between(today, dueDate);
-
-                if (daysLeft >= 0 && daysLeft <= 7) {
+                if (!dueDate.isBefore(today)) { // show upcoming loan
                     double balance = rs.getDouble("outstanding_balance");
-                    System.out.printf("Reminder: RM %.2f loan is due on %s (in %d days).\n",
-                            balance, dueDate, daysLeft);
+                    System.out.printf(Locale.US, "Reminder: %.2f loan is due on %s\n", balance, dueDate);
                     hasReminder = true;
                 }
             }
@@ -232,8 +222,7 @@ public class DatabaseHandler {
 
         String sql = "SELECT timestamp, description, type, amount FROM transactions WHERE user_email = ?";
 
-        try (Statement stmt = conn.createStatement();
-             PreparedStatement ps = getConnection().prepareStatement(sql)) {
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
 
             ps.setString(1, email);
             ResultSet rs = ps.executeQuery();
@@ -243,7 +232,7 @@ public class DatabaseHandler {
                 fw.write("Date,Description,Type,Amount\n");
 
                 while (rs.next()) {
-                    String row = String.format("%s,%s,%s,%.2f\n",
+                    String row = String.format(Locale.US, "%s,%s,%s,%.2f\n",
                             rs.getString("timestamp"),
                             rs.getString("description").replace(",", ";"),  // Handle commas in description
                             rs.getString("type"),
@@ -306,9 +295,8 @@ public class DatabaseHandler {
                     ps.setString(1, userEmail);
                     ps.executeUpdate();
                 }
-                
-                savings -= amount;
-                System.out.println("Transferred RM" + amount + " from savings to balance");
+
+                System.out.println("Transferred " + amount + " from savings to balance");
             }
             conn.commit();
         } catch (SQLException e) {
@@ -388,8 +376,6 @@ public class DatabaseHandler {
                     updateStmt.setString(2, userEmail);
                     updateStmt.executeUpdate();
                 }
-                
-                savings += savingsAmount;
             }
         } catch (SQLException e) {
             System.err.println("Error processing savings: " + e.getMessage());
@@ -468,17 +454,13 @@ public class DatabaseHandler {
             int loanId = rs.getInt("id");
             double balance = rs.getDouble("outstanding_balance");
             double months = rs.getDouble("monthly_repayment");
-//            double monthlyRepayment = balance / months;
             double repaymentAmount = Math.min(balance, months);
-//            System.out.println("DEBUG - balance: " + balance);
-//            System.out.println("DEBUG - monthlyRepayment: " + months);
-//            System.out.println("DEBUG - repaymentAmount: " + repaymentAmount);
 
             conn.setAutoCommit(false);
             try {
                 // Insert a debit transaction for repayment
                 String insertTransaction = "INSERT INTO transactions (type, amount, description, user_email) " +
-                        "VALUES ('debit', ?, 'Loan repayment', ?)";
+                        "VALUES ('Credit', ?, 'Loan repayment', ?)";
                 try (PreparedStatement txnStmt = conn.prepareStatement(insertTransaction)) {
                     txnStmt.setDouble(1, repaymentAmount);
                     txnStmt.setString(2, email);
@@ -543,8 +525,8 @@ public class DatabaseHandler {
 
     public double getBalance(String email) {
         String sql = "SELECT SUM(CASE " +
-                "WHEN type = 'Credit' THEN amount " +  // Credit = +amount
-                "WHEN type = 'Debit' THEN -amount " +  // Debit = -amount
+                "WHEN type = 'Credit' THEN -amount " +
+                "WHEN type = 'Debit' THEN amount " +
                 "ELSE 0 END) AS balance " +
                 "FROM transactions WHERE user_email = ?";
         try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
