@@ -18,8 +18,8 @@ import java.util.concurrent.TimeUnit;
 import org.mindrot.jbcrypt.BCrypt;
 
 public class DatabaseHandler {
-    private static final String DB_URL = "jdbc:sqlite:users.db";
-    static double balance = 0.0;
+    private static final String DB_URL = "jdbc:sqlite:ledger.db";
+//    static double balance = 0.0;
     static double savings = 0.0;
     static Connection conn;
     private ScheduledExecutorService scheduler;
@@ -71,15 +71,16 @@ public class DatabaseHandler {
             stmt.executeUpdate("""
                 CREATE TABLE IF NOT EXISTS loans (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
+                    user_email TEXT NOT NULL,
                     principal_amount REAL NOT NULL,
                     interest_rate REAL NOT NULL,
                     repayment_period INTEGER NOT NULL,
                     outstanding_balance REAL NOT NULL,
+                    monthly_repayment REAL,
                     status TEXT NOT NULL,
-                    created_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     next_payment_date DATE,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
+                    FOREIGN KEY (user_email) REFERENCES users(email)
                 );
                 """);
 
@@ -90,21 +91,6 @@ public class DatabaseHandler {
                     "percentage INTEGER NOT NULL, " +
                     "saved_amount REAL DEFAULT 0, " +
                     "FOREIGN KEY (user_email) REFERENCES users(email))");
-
-
-            ResultSet rs = stmt.executeQuery("""
-                SELECT SUM(CASE WHEN type='Credit' THEN amount ELSE -amount END) AS balance 
-                FROM transactions
-                """);
-            if (rs.next()) {
-                balance = rs.getDouble("balance");
-            }
-
-            rs = stmt.executeQuery(
-                    "SELECT SUM(saved_amount) AS savings FROM savings");
-            if (rs.next()) {
-                savings = rs.getDouble("savings");
-            }
 
         } catch (SQLException e) {
             System.out.println("Error creating tables: " + e.getMessage());
@@ -127,7 +113,7 @@ public class DatabaseHandler {
     }
 
     public void insertUser(String name, String email, String password) {
-        String hashedPassword = BCrypt.hashpw(password, BCrypt.gensalt()); // 🔐 Hashing password
+        String hashedPassword = BCrypt.hashpw(password, BCrypt.gensalt()); // Hashing password
         String sql = "INSERT INTO users(name, email, password) VALUES(?,?,?)";
         try (Connection conn = DriverManager.getConnection(DB_URL);
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -152,7 +138,7 @@ public class DatabaseHandler {
 
             if (rs.next()) {
                 String storedHash = rs.getString("password");
-                return BCrypt.checkpw(password, storedHash); // ✅ Check bcrypt hash
+                return BCrypt.checkpw(password, storedHash); // Check bcrypt hash
             }
         } catch (SQLException e) {
             System.out.println("Error validating user: " + e.getMessage());
@@ -160,25 +146,32 @@ public class DatabaseHandler {
         return false;
     }
 
-    public static void showHistory() {
+    public static void showHistory(String email) {
         System.out.println("==Transaction History==");
-        try (Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT * FROM transactions ORDER BY id DESC")) {
 
-            System.out.println("ID | Type   | Amount  | Description");
-            System.out.println("-----------------------------------");
+        String sql = "SELECT * FROM transactions WHERE user_email = ? ORDER BY timestamp DESC";
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, email);
+            ResultSet rs = stmt.executeQuery();
+
+            System.out.println("ID | Type   | Amount  | Description         | Timestamp");
+            System.out.println("-------------------------------------------------------------");
+
             while (rs.next()) {
-                System.out.printf("%-2d | %-6s | %7.2f | %s\n",
+                System.out.printf("%-2d | %-6s | %7.2f | %-20s | %s\n",
                         rs.getInt("id"),
                         rs.getString("type"),
                         rs.getDouble("amount"),
-                        rs.getString("description"));
+                        rs.getString("description"),
+                        rs.getString("timestamp"));
             }
         } catch (SQLException e) {
             System.err.println("Error retrieving transaction history:");
             e.printStackTrace();
         }
     }
+
 
     public static void saveTransaction(String type, double amount, String description, String email) {
         String sql = "INSERT INTO transactions(type, amount, description, user_email) VALUES(?,?,?,?)";
@@ -195,11 +188,11 @@ public class DatabaseHandler {
         }
     }
 
-    public static void checkLoanReminders(int userId) {
-        String query = "SELECT created_at, repayment_period, outstanding_balance FROM loans WHERE user_id = ? AND status = 'active'";
+    public static void checkLoanReminders(String email) {
+        String query = "SELECT created_at, repayment_period, outstanding_balance FROM loans WHERE user_email = ? AND status = 'active'";
 
         try (PreparedStatement ps = getConnection().prepareStatement(query)) {
-            ps.setInt(1, userId);
+            ps.setString(1, email);
             ResultSet rs = ps.executeQuery();
 
             java.time.LocalDate today = java.time.LocalDate.now();
@@ -405,7 +398,7 @@ public class DatabaseHandler {
 
     public double getSavings(String userEmail) {
         String sql = "SELECT saved_amount FROM savings WHERE user_email = ?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
             pstmt.setString(1, userEmail);
             ResultSet rs = pstmt.executeQuery();
             return rs.next() ? rs.getDouble("saved_amount") : 0.0;
@@ -429,42 +422,42 @@ public class DatabaseHandler {
         }
     }
 
-    public void applyLoan(Scanner scanner, int userId) {
+    public void applyLoan(Scanner scanner, String email) {
         System.out.print("Enter principal amount: ");
         double principal = scanner.nextDouble();
 
-        System.out.print("Enter interest rate (e.g. 0.05 for 5%): ");
-        double interestRate = scanner.nextDouble();
+        System.out.print("Enter interest rate (e.g. 5 for 5%): ");
+        double interestRate = scanner.nextDouble() / 100;
 
         System.out.print("Enter repayment period in months: ");
         int period = scanner.nextInt();
 
         double totalRepayment = principal * (1 + interestRate);
-        Timestamp createdAt = new Timestamp(System.currentTimeMillis());
+        double monthlyRepayment = totalRepayment / period;
 
-        String sql = "INSERT INTO loans (user_id, principal_amount, interest_rate, repayment_period, " +
-                "outstanding_balance, status, created_at) " +
-                "VALUES (?, ?, ?, ?, ?, 'active', ?)";
+        String sql = "INSERT INTO loans (user_email, principal_amount, interest_rate, repayment_period, " +
+                "outstanding_balance, monthly_repayment, status) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'active')";
 
         try (PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
-            pstmt.setInt(1, userId);
+            pstmt.setString(1, email);
             pstmt.setDouble(2, principal);
             pstmt.setDouble(3, interestRate);
             pstmt.setInt(4, period);
             pstmt.setDouble(5, totalRepayment);
-            pstmt.setTimestamp(6, createdAt);
+            pstmt.setDouble(6, monthlyRepayment);
             pstmt.executeUpdate();
-            System.out.println("Loan applied successfully. Total repayment: $" + totalRepayment);
+            System.out.println("Loan applied successfully. Total repayment: " + totalRepayment);
         } catch (SQLException e) {
             e.printStackTrace();
         }
     }
 
-    public void repayLoan(Scanner scanner, int userId) {
-        String sql = "SELECT * FROM loans WHERE user_id = ? AND status = 'active' AND outstanding_balance > 0";
+    public void repayLoan(Scanner scanner, String email) {
+        String sql = "SELECT * FROM loans WHERE user_email = ? AND status = 'active' AND outstanding_balance > 0 AND monthly_repayment IS NOT NULL ORDER BY created_at DESC LIMIT 1";
 
         try (PreparedStatement stmt = getConnection().prepareStatement(sql)) {
-            stmt.setInt(1, userId);
+            stmt.setString(1, email);
             ResultSet rs = stmt.executeQuery();
 
             if (!rs.next()) {
@@ -474,22 +467,26 @@ public class DatabaseHandler {
 
             int loanId = rs.getInt("id");
             double balance = rs.getDouble("outstanding_balance");
-            int months = rs.getInt("repayment_period");
-            double monthlyRepayment = balance / months;
+            double months = rs.getDouble("monthly_repayment");
+//            double monthlyRepayment = balance / months;
+            double repaymentAmount = Math.min(balance, months);
+//            System.out.println("DEBUG - balance: " + balance);
+//            System.out.println("DEBUG - monthlyRepayment: " + months);
+//            System.out.println("DEBUG - repaymentAmount: " + repaymentAmount);
 
             conn.setAutoCommit(false);
             try {
                 // Insert a debit transaction for repayment
                 String insertTransaction = "INSERT INTO transactions (type, amount, description, user_email) " +
-                        "VALUES ('debit', ?, 'Loan repayment', (SELECT email FROM users WHERE id = ?))";
+                        "VALUES ('debit', ?, 'Loan repayment', ?)";
                 try (PreparedStatement txnStmt = conn.prepareStatement(insertTransaction)) {
-                    txnStmt.setDouble(1, monthlyRepayment);
-                    txnStmt.setInt(2, userId);
+                    txnStmt.setDouble(1, repaymentAmount);
+                    txnStmt.setString(2, email);
                     txnStmt.executeUpdate();
                 }
 
                 // Update loan balance and possibly status
-                double newBalance = balance - monthlyRepayment;
+                double newBalance = balance - repaymentAmount;
                 String updateLoan = "UPDATE loans SET outstanding_balance = ?, status = ? WHERE id = ?";
                 try (PreparedStatement updLoan = conn.prepareStatement(updateLoan)) {
                     updLoan.setDouble(1, newBalance);
@@ -499,7 +496,7 @@ public class DatabaseHandler {
                 }
 
                 conn.commit();
-                System.out.println("Repayment of $" + monthlyRepayment + " successful.");
+                System.out.println("Repayment of " + repaymentAmount + " successful.");
             } catch (SQLException e) {
                 try {
                     conn.rollback();
@@ -520,10 +517,10 @@ public class DatabaseHandler {
         }
     }
 
-    public double getLoanBalance(String userEmail) {
-        String sql = "SELECT COALESCE(SUM(outstanding_balance), 0) FROM loans WHERE user_id = (SELECT id FROM users WHERE email = ?)";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, userEmail);
+    public double getLoanBalance(String email) {
+        String sql = "SELECT COALESCE(SUM(outstanding_balance), 0) FROM loans WHERE user_email = ? AND status = 'active' AND outstanding_balance > 0";
+        try (PreparedStatement pstmt = getConnection().prepareStatement(sql)) {
+            pstmt.setString(1, email);
             ResultSet rs = pstmt.executeQuery();
             return rs.next() ? rs.getDouble(1) : 0.0;
         } catch (SQLException e) {
@@ -533,7 +530,7 @@ public class DatabaseHandler {
     }
 
     public boolean isBlocked(int userId) {
-        String sql = "SELECT * FROM loans WHERE user_id = ? AND status = 'active' AND outstanding_balance > 0 AND created_at <= date('now', '-repayment_period months')";
+        String sql = "SELECT * FROM loans WHERE user_email = ? AND status = 'active' AND outstanding_balance > 0 AND created_at <= date('now', '-repayment_period months')";
         try (PreparedStatement stmt = getConnection().prepareStatement(sql)) {
             stmt.setInt(1, userId);
             ResultSet rs = stmt.executeQuery();
@@ -544,6 +541,63 @@ public class DatabaseHandler {
         }
     }
 
+    public double getBalance(String email) {
+        String sql = "SELECT SUM(CASE " +
+                "WHEN type = 'Credit' THEN amount " +  // Credit = +amount
+                "WHEN type = 'Debit' THEN -amount " +  // Debit = -amount
+                "ELSE 0 END) AS balance " +
+                "FROM transactions WHERE user_email = ?";
+        try (PreparedStatement ps = getConnection().prepareStatement(sql)) {
+            ps.setString(1, email);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getDouble("balance");
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching balance:");
+            e.printStackTrace();
+        }
+        return 0.0;
+    }
+
+    public static void exportVisualizationData() {
+        try (Statement stmt = conn.createStatement()) {
+            // Create views for Power BI
+            stmt.execute("CREATE VIEW IF NOT EXISTS vw_spending_trends AS " +
+                    "SELECT date(timestamp) AS day, SUM(amount) AS total, type " +
+                    "FROM transactions WHERE type = 'Debit' " +
+                    "GROUP BY day, type");
+
+            stmt.execute("CREATE VIEW IF NOT EXISTS vw_savings_growth AS " +
+                    "SELECT date(timestamp) AS day, SUM(amount) AS savings_balance " +
+                    "FROM transactions WHERE description LIKE '%savings%' " +
+                    "GROUP BY day");
+
+            stmt.execute("CREATE VIEW IF NOT EXISTS vw_loan_repayments AS " +
+                    "SELECT date(timestamp) AS day, SUM(amount) AS payment " +
+                    "FROM transactions WHERE description LIKE '%loan repayment%' " +
+                    "GROUP BY day");
+
+            stmt.execute("CREATE VIEW IF NOT EXISTS vw_spending_categories AS " +
+                    "SELECT " +
+                    "  CASE " +
+                    "    WHEN description LIKE '%food%' THEN 'Food' " +
+                    "    WHEN description LIKE '%rent%' THEN 'Housing' " +
+                    "    WHEN description LIKE '%transport%' THEN 'Transport' " +
+                    "    ELSE 'Other' " +
+                    "  END AS category, " +
+                    "  SUM(amount) AS amount " +
+                    "FROM transactions WHERE type = 'Debit' " +
+                    "GROUP BY category");
+
+            System.out.println("Views for visualization created. You can now use Power BI to access them.");
+
+        } catch (SQLException e) {
+            System.err.println("Error creating visualization views: " + e.getMessage());
+        }
+    }
+
     public static void disconnectDatabase() throws SQLException {
         if (conn != null && !conn.isClosed()) {
             conn.close();
@@ -551,5 +605,4 @@ public class DatabaseHandler {
             System.out.println("Database connection closed.");
         }
     }
-
 }
